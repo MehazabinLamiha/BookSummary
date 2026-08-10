@@ -16,6 +16,14 @@ import random
 import time
 
 import faiss
+
+# Pin FAISS to a single thread. On a 20-vector demo dataset there is zero benefit
+# to multi-threading any of these indexes — but IndexPQ's search() parallelizes
+# over queries via OpenMP, and with just 1 query per call, thread spin-up/sync
+# overhead can dominate the (sub-microsecond) actual computation on a multi-core
+# host, making PQ look artificially — and consistently — slower than it really is.
+# Single-threaded gives a fair, apples-to-apples latency comparison across indexes.
+faiss.omp_set_num_threads(1)
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
