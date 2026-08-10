@@ -1,0 +1,6 @@
+streamlit>=1.36
+faiss-cpu>=1.8.0
+sentence-transformers>=3.0.0
+pandas>=2.0
+numpy>=1.26,<2.0
+matplotlib>=3.8
