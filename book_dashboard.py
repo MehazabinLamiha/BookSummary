@@ -1,5 +1,5 @@
 """
-FAISS Book Search Dashboard — Book Summaries
+FAISS Book Search Dashboard — Book Summariess
 ----------------------------------------------
 A professional Streamlit dashboard for the "Book Summaries" FAISS lab.
 Deliberately styled differently from the Customer Reviews dashboard
