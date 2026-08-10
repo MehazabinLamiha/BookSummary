@@ -12,7 +12,9 @@ Run locally:
 Deploy: see README (GitHub -> Streamlit Community Cloud).
 """
 
+import hashlib
 import os
+from pathlib import Path
 
 # Pin every math backend to a single thread — and do it BEFORE numpy/faiss are
 # imported, since these libraries size their internal thread pools once at
@@ -293,6 +295,63 @@ PRESET_QUERIES = [
 INDEX_NAMES = ["KNN (FlatL2)", "IVF", "PQ", "IVF+PQ", "HNSW"]
 VALID_PQ_M = [4, 8, 12, 16, 24, 32, 48, 64, 96]  # all divide 384 (MiniLM embedding dim)
 
+# --------------------------------------------------------------------------
+# Dataset source — bundled CSV by default, with an optional user upload
+# --------------------------------------------------------------------------
+DEFAULT_CSV_PATH = Path(__file__).resolve().parent / "book_summaries_dataset.csv"
+REQUIRED_COLUMNS = {"title", "author", "genre", "text"}
+DATASET_COLUMNS = ["id", "genre", "title", "author", "text"]
+
+
+def _dataset_fingerprint(df):
+    """Cheap, stable hash of a dataset's content. build_indexes() takes its
+    embeddings matrix with a leading underscore (so Streamlit doesn't hash
+    it — it's expensive to hash and _embeddings already depends on df), so
+    without this the index-build cache could otherwise serve stale indexes
+    trained on a previous dataset after a new CSV is uploaded."""
+    return hashlib.md5(df.to_csv(index=False).encode("utf-8")).hexdigest()
+
+
+def load_default_dataset():
+    """Load the bundled book_summaries_dataset.csv sitting next to this
+    script. Falls back to the built-in BOOK_DATABASE constant if the CSV
+    file isn't present (e.g. it wasn't committed alongside the script),
+    so the app stays fully self-contained either way."""
+    if DEFAULT_CSV_PATH.exists():
+        df = pd.read_csv(DEFAULT_CSV_PATH)
+    else:
+        df = pd.DataFrame(BOOK_DATABASE)
+    if "id" not in df.columns:
+        df.insert(0, "id", range(1, len(df) + 1))
+    return df[DATASET_COLUMNS].reset_index(drop=True)
+
+
+def load_uploaded_dataset(uploaded_file):
+    """Parse and validate a user-uploaded CSV. Raises ValueError with a
+    human-readable message if it can't be used, so the caller can fall
+    back to the default dataset and show the reason in the UI."""
+    try:
+        df = pd.read_csv(uploaded_file)
+    except Exception as e:
+        raise ValueError(f"Couldn't read that file as CSV ({e}).")
+
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    missing = REQUIRED_COLUMNS - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"Missing required column(s): {', '.join(sorted(missing))}. "
+            f"A dataset CSV needs at least: {', '.join(sorted(REQUIRED_COLUMNS))} "
+            f"(an 'id' column is optional — auto-generated if missing)."
+        )
+
+    df = df.dropna(subset=list(REQUIRED_COLUMNS)).reset_index(drop=True)
+    if df.empty:
+        raise ValueError("The uploaded CSV has no usable rows after removing blank entries.")
+    if "id" not in df.columns:
+        df.insert(0, "id", range(1, len(df) + 1))
+    return df[DATASET_COLUMNS].reset_index(drop=True)
+
+
 _UNIQUE_GENRES = sorted({b["genre"] for b in BOOK_DATABASE})
 GENRE_COLOR_MAP = {g: GENRE_COLORS[i % len(GENRE_COLORS)] for i, g in enumerate(_UNIQUE_GENRES)}
 
@@ -310,16 +369,14 @@ def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 
-@st.cache_data(show_spinner="Encoding the 20 book summaries into embeddings...")
-def get_database_and_embeddings():
-    df = pd.DataFrame(BOOK_DATABASE)
+@st.cache_data(show_spinner="Encoding book summaries into embeddings...")
+def compute_embeddings(df):
     model = load_model()
-    embeddings = model.encode(df["text"].tolist(), convert_to_numpy=True).astype("float32")
-    return df, embeddings
+    return model.encode(df["text"].tolist(), convert_to_numpy=True).astype("float32")
 
 
 @st.cache_resource(show_spinner="Building FAISS indexes with current parameters...")
-def build_indexes(_embeddings, d, nlist, pq_m, pq_nbits, hnsw_m):
+def build_indexes(_embeddings, d, nlist, pq_m, pq_nbits, hnsw_m, dataset_hash):
     indexes, training_times = {}, {}
     warmup_vec = _embeddings[:1]
 
@@ -395,6 +452,27 @@ def run_query(query_text, model, indexes, top_k, timing_repeats=5):
 # Sidebar — tunable index parameters + extra controls
 # --------------------------------------------------------------------------
 st.sidebar.header("⚙️ Search & Index Settings")
+
+st.sidebar.subheader("📤 Dataset")
+uploaded_csv = st.sidebar.file_uploader(
+    "Upload your own book CSV (optional)",
+    type=["csv"],
+    help="Required columns: title, author, genre, text. An 'id' column is optional "
+         "— auto-generated if missing. Leave empty to use the bundled 20-book dataset.",
+)
+if uploaded_csv is not None:
+    try:
+        df_database = load_uploaded_dataset(uploaded_csv)
+        st.sidebar.success(f"✅ Using your upload — {len(df_database)} books.")
+    except ValueError as e:
+        st.sidebar.error(f"⚠️ {e}")
+        st.sidebar.caption("Falling back to the default dataset below.")
+        df_database = load_default_dataset()
+else:
+    df_database = load_default_dataset()
+
+st.sidebar.divider()
+
 TOP_K = st.sidebar.slider("Top-K (results per query)", min_value=1, max_value=10, value=5,
                            help="How many nearest neighbours each index returns per query.")
 NLIST = st.sidebar.slider("IVF nlist (clusters)", min_value=1, max_value=20, value=4,
@@ -405,6 +483,17 @@ PQ_NBITS = st.sidebar.slider("PQ nbits (bits/subquantizer)", min_value=2, max_va
                               help="2^nbits centroids per subquantizer.")
 HNSW_M = st.sidebar.slider("HNSW M (neighbors/node)", min_value=4, max_value=64, value=16,
                             help="Graph connectivity for the HNSW index.")
+
+# A tiny/custom uploaded dataset can be smaller than the slider defaults above —
+# clamp both so index building never receives more clusters or a bigger top-k
+# than there are rows to work with.
+n_books = len(df_database)
+if TOP_K > n_books:
+    TOP_K = n_books
+    st.sidebar.caption(f"ℹ️ Top-K clamped to {n_books} (the active dataset's size).")
+if NLIST > n_books:
+    NLIST = max(1, n_books)
+    st.sidebar.caption(f"ℹ️ IVF nlist clamped to {NLIST} (the active dataset's size).")
 
 selected_indexes = INDEX_NAMES  # search results always compare all 5 index methods
 
@@ -420,26 +509,28 @@ for name in INDEX_NAMES:
 
 st.sidebar.divider()
 st.sidebar.caption(
-    "Changing any slider automatically rebuilds all 5 indexes with the new "
-    "settings (cheap on this 20-book demo database). Every search always "
-    "compares KNN, IVF, PQ, IVF+PQ, and HNSW side by side."
+    "Changing any slider — or uploading a new CSV — automatically rebuilds all 5 "
+    "indexes with the new settings (cheap on a dataset this small). Every search "
+    "always compares KNN, IVF, PQ, IVF+PQ, and HNSW side by side."
 )
 
 # --------------------------------------------------------------------------
-# Load model / embeddings / indexes
+# Load model / embeddings / indexes (df_database was already loaded above,
+# from the sidebar's CSV upload or the bundled default CSV)
 # --------------------------------------------------------------------------
 model = load_model()
-df_database, embeddings = get_database_and_embeddings()
+embeddings = compute_embeddings(df_database)
 d = embeddings.shape[1]
-indexes, training_times = build_indexes(embeddings, d, NLIST, PQ_M, PQ_NBITS, HNSW_M)
+dataset_hash = _dataset_fingerprint(df_database)
+indexes, training_times = build_indexes(embeddings, d, NLIST, PQ_M, PQ_NBITS, HNSW_M, dataset_hash)
 
 # --------------------------------------------------------------------------
 # Header — hero banner + KPI cards
 # --------------------------------------------------------------------------
-st.markdown("""
+st.markdown(f"""
 <div class="hero-banner">
   <h1>📖 FAISS Book Search Dashboard</h1>
-  <p>Semantic search & FAISS index benchmarking over a 20-book library across 5 genres</p>
+  <p>Semantic search & FAISS index benchmarking over a {len(df_database)}-book library across {df_database['genre'].nunique()} genres</p>
   <div class="hero-accent-bar"></div>
 </div>
 """, unsafe_allow_html=True)
@@ -472,6 +563,11 @@ with tab_query:
         st.session_state.active_query = None
 
     st.subheader("Choose a query")
+    if uploaded_csv is not None:
+        st.caption(
+            "ℹ️ The 12 presets below are written for the default 20-book dataset and may not "
+            "match your uploaded books — use the free-text prompt below instead for best results."
+        )
     placeholder = "— Select a preset query —"
     query_labels = [placeholder] + [f"{i + 1}. [{g}] {q}" for i, (g, q) in enumerate(PRESET_QUERIES)]
     label_to_text = {f"{i + 1}. [{g}] {q}": q for i, (g, q) in enumerate(PRESET_QUERIES)}
@@ -678,7 +774,26 @@ with tab_benchmark:
 # Tab 3 — Browse the book database + genre distribution
 # --------------------------------------------------------------------------
 with tab_data:
-    st.subheader("20-book database (5 genres × 4 books)")
+    st.subheader(f"{len(df_database)}-book database ({df_database['genre'].nunique()} genres)")
+
+    csv_bytes = df_database.to_csv(index=False).encode("utf-8")
+    dl_col, note_col = st.columns([1, 3])
+    with dl_col:
+        st.download_button(
+            "⬇️ Download active dataset as CSV",
+            csv_bytes,
+            "book_summaries_dataset.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+    with note_col:
+        st.caption(
+            "This is the dataset currently powering search — either the bundled "
+            "20-book default, or the CSV you uploaded in the sidebar."
+        )
+
+    with st.expander("👀 View raw CSV"):
+        st.code(df_database.to_csv(index=False), language="csv")
 
     genre_filter = st.multiselect(
         "Filter by genre",
