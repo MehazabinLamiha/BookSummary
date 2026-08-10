@@ -298,11 +298,13 @@ def get_database_and_embeddings():
 @st.cache_resource(show_spinner="Building FAISS indexes with current parameters...")
 def build_indexes(_embeddings, d, nlist, pq_m, pq_nbits, hnsw_m):
     indexes, training_times = {}, {}
+    warmup_vec = _embeddings[:1]
 
     t0 = time.perf_counter()
     idx = faiss.IndexFlatL2(d)
     idx.add(_embeddings)
     training_times["KNN (FlatL2)"] = time.perf_counter() - t0
+    idx.search(warmup_vec, 1)  # warm-up: absorbs one-time thread/BLAS init cost, not real query time
     indexes["KNN (FlatL2)"] = idx
 
     t0 = time.perf_counter()
@@ -312,6 +314,7 @@ def build_indexes(_embeddings, d, nlist, pq_m, pq_nbits, hnsw_m):
     idx.add(_embeddings)
     idx.nprobe = min(2, nlist)
     training_times["IVF"] = time.perf_counter() - t0
+    idx.search(warmup_vec, 1)
     indexes["IVF"] = idx
 
     t0 = time.perf_counter()
@@ -319,6 +322,7 @@ def build_indexes(_embeddings, d, nlist, pq_m, pq_nbits, hnsw_m):
     idx.train(_embeddings)
     idx.add(_embeddings)
     training_times["PQ"] = time.perf_counter() - t0
+    idx.search(warmup_vec, 1)
     indexes["PQ"] = idx
 
     t0 = time.perf_counter()
@@ -328,25 +332,32 @@ def build_indexes(_embeddings, d, nlist, pq_m, pq_nbits, hnsw_m):
     idx.add(_embeddings)
     idx.nprobe = min(2, nlist)
     training_times["IVF+PQ"] = time.perf_counter() - t0
+    idx.search(warmup_vec, 1)
     indexes["IVF+PQ"] = idx
 
     t0 = time.perf_counter()
     idx = faiss.IndexHNSWFlat(d, hnsw_m)
     idx.add(_embeddings)
     training_times["HNSW"] = time.perf_counter() - t0
+    idx.search(warmup_vec, 1)
     indexes["HNSW"] = idx
 
     return indexes, training_times
 
 
-def run_query(query_text, model, indexes, top_k):
+def run_query(query_text, model, indexes, top_k, timing_repeats=5):
     q_vec = model.encode([query_text], convert_to_numpy=True).astype("float32")
     results = {}
     for name, idx in indexes.items():
-        t0 = time.perf_counter()
-        D, I = idx.search(q_vec, top_k)
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-        results[name] = {"I": I[0], "D": D[0], "latency_ms": elapsed_ms}
+        # Time several repeats and take the median — a single call on a 20-vector
+        # index is sub-millisecond, so one-off OS/scheduler jitter can otherwise
+        # dominate the number. The median is far more representative than one sample.
+        timings_ms = []
+        for _ in range(timing_repeats):
+            t0 = time.perf_counter()
+            D, I = idx.search(q_vec, top_k)
+            timings_ms.append((time.perf_counter() - t0) * 1000)
+        results[name] = {"I": I[0], "D": D[0], "latency_ms": float(np.median(timings_ms))}
 
     gt_set = set(results["KNN (FlatL2)"]["I"].tolist())
     for name in results:
@@ -475,6 +486,7 @@ with tab_query:
         st.markdown(legend_html, unsafe_allow_html=True)
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
         st.caption(f"Top-{TOP_K} results below — every method (KNN, IVF, PQ, IVF+PQ, HNSW) is always shown side by side.")
+        st.caption("Latency = median of 5 repeated timed searches per index, to filter out one-off system/thread warm-up noise on a dataset this small.")
 
         cols = st.columns(len(INDEX_NAMES))
         for col, name in zip(cols, INDEX_NAMES):
