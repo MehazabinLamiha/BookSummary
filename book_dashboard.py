@@ -32,24 +32,32 @@ st.set_page_config(
 )
 
 # --------------------------------------------------------------------------
-# Theme — light green / yellow palette + a professional matplotlib theme
+# Theme — bold multi-color palette (one distinct hue per index) + a
+# professional matplotlib theme
 # --------------------------------------------------------------------------
 INDEX_COLORS = {
-    "KNN (FlatL2)": "#1B5E20",   # deep forest green — ground truth, stands apart
-    "IVF": "#66BB6A",            # medium leaf green
-    "PQ": "#FBC02D",             # golden yellow
-    "IVF+PQ": "#C0CA33",         # lime / olive
-    "HNSW": "#AED581",           # light spring green
+    "KNN (FlatL2)": "#2E5CE6",   # electric blue — ground truth, stands apart
+    "IVF": "#9B5DE5",            # violet
+    "PQ": "#FF9F1C",             # amber / orange
+    "IVF+PQ": "#F72585",         # magenta / pink
+    "HNSW": "#00BFA6",           # teal
 }
-GENRE_COLORS = ["#A5D6A7", "#FFF59D", "#DCE775", "#C5E1A5", "#FDD835"]
+INDEX_ICONS = {
+    "KNN (FlatL2)": "🎯",
+    "IVF": "🗂️",
+    "PQ": "🧬",
+    "IVF+PQ": "🧩",
+    "HNSW": "🕸️",
+}
+GENRE_COLORS = ["#F72585", "#4CC9F0", "#FFD166", "#9B5DE5", "#06D6A0"]
 
 plt.rcParams.update({
     "font.family": "sans-serif",
     "font.sans-serif": ["DejaVu Sans", "Segoe UI", "Arial", "Helvetica"],
     "axes.edgecolor": "#B0B0B0",
-    "axes.labelcolor": "#33421F",
+    "axes.labelcolor": "#2B2D42",
     "axes.labelsize": 10,
-    "text.color": "#33421F",
+    "text.color": "#2B2D42",
     "xtick.color": "#4A4A4A",
     "ytick.color": "#4A4A4A",
     "axes.titleweight": "bold",
@@ -63,19 +71,82 @@ plt.rcParams.update({
 st.markdown("""
 <style>
 .hero-banner {
-    background: linear-gradient(90deg, #A8E063 0%, #F9D423 100%);
-    padding: 26px 32px;
-    border-radius: 14px;
+    background: linear-gradient(90deg, #2E5CE6 0%, #9B5DE5 33%, #F72585 66%, #FF9F1C 100%);
+    padding: 28px 32px;
+    border-radius: 16px;
     margin-bottom: 18px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.12);
 }
-.hero-banner h1 { color: #22350D; margin: 0; font-size: 30px; }
-.hero-banner p { color: #33421F; margin: 6px 0 0 0; font-size: 15px; }
+.hero-banner h1 { color: #FFFFFF; margin: 0; font-size: 30px; text-shadow: 0 1px 4px rgba(0,0,0,0.25); }
+.hero-banner p { color: #F5F0FF; margin: 6px 0 0 0; font-size: 15px; }
 div[data-testid="stMetric"] {
-    background: #F7FBEF;
-    border: 1px solid #D9EBC2;
-    border-left: 5px solid #8BC34A;
+    background: #FAFAFF;
+    border: 1px solid #E4E1F5;
+    border-left: 5px solid #9B5DE5;
     border-radius: 10px;
     padding: 10px 14px 4px 14px;
+}
+.kpi-card {
+    border-radius: 12px;
+    padding: 14px 16px;
+    color: white;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+}
+.kpi-card .kpi-label { font-size: 13px; opacity: 0.92; margin: 0; }
+.kpi-card .kpi-value { font-size: 26px; font-weight: 700; margin: 2px 0 0 0; }
+.legend-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    color: white;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 3px 6px 3px 0;
+}
+.result-card {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #ECECF4;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    margin-bottom: 10px;
+    height: 100%;
+}
+.result-card-header {
+    padding: 10px 12px;
+    color: white;
+    font-weight: 700;
+    font-size: 14.5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.result-card-stats {
+    padding: 7px 12px;
+    font-size: 12px;
+    background: #FAFAFC;
+    color: #444;
+    border-bottom: 1px solid #ECECF4;
+}
+.result-card-body {
+    padding: 8px 12px 12px 12px;
+    background: white;
+}
+.result-book {
+    padding: 6px 0;
+    border-bottom: 1px dashed #EEEEF4;
+    font-size: 13px;
+}
+.result-book:last-child { border-bottom: none; }
+.genre-pill {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: white;
+    margin-left: 4px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -96,7 +167,7 @@ def style_bar_subplot(ax, value_fmt="{:.2f}"):
         ax.annotate(
             value_fmt.format(height),
             (bar.get_x() + bar.get_width() / 2, height),
-            ha="center", va="bottom", fontsize=8.5, color="#33421F",
+            ha="center", va="bottom", fontsize=8.5, color="#2B2D42",
             xytext=(0, 3), textcoords="offset points",
         )
     ax.set_xlabel("")
@@ -170,6 +241,14 @@ PRESET_QUERIES = [
 
 INDEX_NAMES = ["KNN (FlatL2)", "IVF", "PQ", "IVF+PQ", "HNSW"]
 VALID_PQ_M = [4, 8, 12, 16, 24, 32, 48, 64, 96]  # all divide 384 (MiniLM embedding dim)
+
+_UNIQUE_GENRES = sorted({b["genre"] for b in BOOK_DATABASE})
+GENRE_COLOR_MAP = {g: GENRE_COLORS[i % len(GENRE_COLORS)] for i, g in enumerate(_UNIQUE_GENRES)}
+
+
+def genre_pill(genre):
+    color = GENRE_COLOR_MAP.get(genre, "#999999")
+    return f"<span class='genre-pill' style='background:{color};'>{genre}</span>"
 
 
 # --------------------------------------------------------------------------
@@ -265,21 +344,22 @@ PQ_NBITS = st.sidebar.slider("PQ nbits (bits/subquantizer)", min_value=2, max_va
 HNSW_M = st.sidebar.slider("HNSW M (neighbors/node)", min_value=4, max_value=64, value=16,
                             help="Graph connectivity for the HNSW index.")
 
+selected_indexes = INDEX_NAMES  # search results always compare all 5 index methods
+
 st.sidebar.divider()
-st.sidebar.subheader("🧩 Extra Options")
-selected_indexes = st.sidebar.multiselect(
-    "Indexes to compare",
-    options=INDEX_NAMES,
-    default=INDEX_NAMES,
-    help="Choose a subset of indexes to display in results (all 5 are still built and used as ground truth internally).",
-)
-if not selected_indexes:
-    selected_indexes = INDEX_NAMES
+st.sidebar.subheader("🎨 Index Legend")
+for name in INDEX_NAMES:
+    st.sidebar.markdown(
+        f"<span class='legend-chip' style='background:{INDEX_COLORS[name]};'>"
+        f"{INDEX_ICONS[name]} {name}</span>",
+        unsafe_allow_html=True,
+    )
 
 st.sidebar.divider()
 st.sidebar.caption(
     "Changing any slider automatically rebuilds all 5 indexes with the new "
-    "settings (cheap on this 20-book demo database)."
+    "settings (cheap on this 20-book demo database). Every search always "
+    "compares KNN, IVF, PQ, IVF+PQ, and HNSW side by side."
 )
 
 # --------------------------------------------------------------------------
@@ -300,11 +380,23 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-kpi1.metric("📚 Books in Database", len(df_database))
-kpi2.metric("🏷️ Genres", df_database["genre"].nunique())
-kpi3.metric("🧬 Embedding Dimension", d)
-kpi4.metric("🗂️ Indexes Built", len(indexes))
+KPI_ACCENTS = ["#2E5CE6", "#9B5DE5", "#F72585", "#00BFA6"]
+kpi_data = [
+    ("📚", "Books in Database", len(df_database)),
+    ("🏷️", "Genres", df_database["genre"].nunique()),
+    ("🧬", "Embedding Dimension", d),
+    ("🗂️", "Indexes Built", len(indexes)),
+]
+kpi_cols = st.columns(4)
+for col, accent, (icon, label, value) in zip(kpi_cols, KPI_ACCENTS, kpi_data):
+    with col:
+        st.markdown(
+            f"<div class='kpi-card' style='background:{accent};'>"
+            f"<p class='kpi-label'>{icon} {label}</p>"
+            f"<p class='kpi-value'>{value}</p>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
 tab_query, tab_benchmark, tab_data = st.tabs(["🔎 Semantic Search", "📊 Benchmark & Analytics", "📖 Book Library"])
 
@@ -345,22 +437,42 @@ with tab_query:
         results = run_query(st.session_state.active_query, model, indexes, TOP_K)
         st.markdown(f"**Query:** _{st.session_state.active_query}_")
 
-        cols = st.columns(len(selected_indexes))
-        for col, name in zip(cols, selected_indexes):
+        legend_html = "".join(
+            f"<span class='legend-chip' style='background:{INDEX_COLORS[n]};'>{INDEX_ICONS[n]} {n}</span>"
+            for n in INDEX_NAMES
+        )
+        st.markdown(legend_html, unsafe_allow_html=True)
+        st.markdown(f"<div style='height:6px'></div>", unsafe_allow_html=True)
+        st.caption(f"Top-{TOP_K} results below — every method (KNN, IVF, PQ, IVF+PQ, HNSW) is always shown side by side.")
+
+        cols = st.columns(len(INDEX_NAMES))
+        for col, name in zip(cols, INDEX_NAMES):
             r = results[name]
+            color = INDEX_COLORS[name]
             with col:
+                book_rows_html = ""
+                for rank, i in enumerate(r["I"], start=1):
+                    row = df_database.iloc[int(i)]
+                    book_rows_html += (
+                        f"<div class='result-book'>"
+                        f"<b>#{rank}</b> {row['title']} — <i>{row['author']}</i>"
+                        f"{genre_pill(row['genre'])}"
+                        f"</div>"
+                    )
                 st.markdown(
-                    f"<div style='border-left:5px solid {INDEX_COLORS[name]}; padding:6px 10px; "
-                    f"background:#F7FBEF; border-radius:6px;'><b>{name}</b></div>",
+                    f"<div class='result-card'>"
+                    f"<div class='result-card-header' style='background:{color};'>"
+                    f"<span>{INDEX_ICONS[name]} {name}</span></div>"
+                    f"<div class='result-card-stats'>"
+                    f"⏱️ {r['latency_ms']:.4f} ms &nbsp;·&nbsp; 🎯 Recall {r['recall']:.2f} "
+                    f"&nbsp;·&nbsp; 🔍 Precision {r['precision']:.2f}</div>"
+                    f"<div class='result-card-body'>{book_rows_html}</div>"
+                    f"</div>",
                     unsafe_allow_html=True,
                 )
-                st.caption(f"{r['latency_ms']:.4f} ms · Recall {r['recall']:.2f} · Precision {r['precision']:.2f}")
-                for i in r["I"]:
-                    row = df_database.iloc[int(i)]
-                    st.write(f"- **{row['title']}** — {row['author']} _( {row['genre']} )_")
 
-        latencies = [results[name]["latency_ms"] for name in selected_indexes]
-        colors = [INDEX_COLORS[name] for name in selected_indexes]
+        latencies = [results[name]["latency_ms"] for name in INDEX_NAMES]
+        colors = [INDEX_COLORS[name] for name in INDEX_NAMES]
 
         fig, ax = plt.subplots(figsize=(9, 3.2), dpi=150)
         bars = ax.barh(selected_indexes, latencies, color=colors, edgecolor="white", linewidth=1.1, height=0.62, zorder=3)
@@ -377,7 +489,7 @@ with tab_query:
             ax.annotate(
                 f"{val:.4f} ms",
                 (bar.get_width(), bar.get_y() + bar.get_height() / 2),
-                ha="left", va="center", fontsize=9, color="#33421F",
+                ha="left", va="center", fontsize=9, color="#2B2D42",
                 xytext=(6, 0), textcoords="offset points",
             )
         fig.tight_layout()
@@ -489,7 +601,7 @@ with tab_benchmark:
             y = results_df.loc[name, f"Recall@{TOP_K}"]
             size = max(training_times[name] * 1000, 0.05) * 350 + 120
             ax2.scatter(x, y, s=size, color=INDEX_COLORS[name], edgecolor="white", linewidth=1.4, alpha=0.9, zorder=3)
-            ax2.annotate(name, (x, y), textcoords="offset points", xytext=(10, 6), fontsize=9.5, color="#33421F", fontweight="bold")
+            ax2.annotate(name, (x, y), textcoords="offset points", xytext=(10, 6), fontsize=9.5, color="#2B2D42", fontweight="bold")
         ax2.set_xlabel("Avg Query Latency (ms)")
         ax2.set_ylabel(f"Recall@{TOP_K}")
         ax2.set_ylim(-0.05, 1.2)
@@ -523,7 +635,7 @@ with tab_data:
     with col_chart:
         genre_counts = df_database["genre"].value_counts()
         fig3, ax3 = plt.subplots(figsize=(5.5, 5.5), dpi=150)
-        colors = GENRE_COLORS[: len(genre_counts)]
+        colors = [GENRE_COLOR_MAP[g] for g in genre_counts.index]
         wedges, texts, autotexts = ax3.pie(
             genre_counts.values, labels=genre_counts.index, colors=colors,
             autopct="%1.0f%%", startangle=90, pctdistance=0.8,
@@ -531,10 +643,10 @@ with tab_data:
         )
         for t in texts:
             t.set_fontsize(9.5)
-            t.set_color("#33421F")
+            t.set_color("#2B2D42")
         for at in autotexts:
             at.set_fontsize(9)
-            at.set_color("#22350D")
+            at.set_color("#1A1B2E")
             at.set_fontweight("bold")
         ax3.set_title("Genre Distribution", fontsize=13, fontweight="bold", pad=14)
         fig3.tight_layout()
